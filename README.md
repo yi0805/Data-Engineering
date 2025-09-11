@@ -1,6 +1,6 @@
-# track username and password for logging in airflow 
+# track password for logging in airflow 
 
-docker logs airflow --since=30m | Select-String -Pattern "username|password|admin"
+docker exec -it airflow bash -lc 'echo $AIRFLOW_HOME; cat $AIRFLOW_HOME/standalone_admin_password.txt'
 
 # rebuild command line 
 
