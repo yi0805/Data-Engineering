@@ -1,4 +1,6 @@
-# track password for logging in airflow 
+# Command tips
+
+## track password for logging in airflow 
 docker exec -it airflow bash -lc 'echo $AIRFLOW_HOME; cat $AIRFLOW_HOME/standalone_admin_password.txt'
 
 ## rebuild command line 
@@ -12,9 +14,18 @@ docker exec -it -u root airflow bash
 
 ## Set up git from command line
 git init
+
 git add (project name)
+
 git commit -m ("content")
+
 git remote add origin (SSH)
+
 git branch -M main
+
 git push -u origin main  or git push -u origin main --allow-unrelated-histories
+
+## Streamlit
+streamlit run "D:\airflow material\dags\app.py"
+
  
