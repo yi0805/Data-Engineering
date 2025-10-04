@@ -15,7 +15,7 @@ def run_etl():
     print("ETL started", flush=True)
     hook = PostgresHook(postgres_conn_id="postgres_localhost", schema="test")
     conn = hook.get_conn()
-    conn.autocommit = True  
+    conn.autocommit = True
     cur = conn.cursor()
 
     cur.execute("drop table FactSales")
@@ -103,12 +103,11 @@ def run_etl():
 
     def insert_then_get_id(cur, insert_sql: str, select_sql: str, params: tuple):
         cur.execute(insert_sql, params)
-        row = cur.fetchone()  
+        row = cur.fetchone()
         if row:
             return row[0]
         cur.execute(select_sql, params)
         return cur.fetchone()[0]
-
 
     sql_dim_product_ins = """
         INSERT INTO DimProduct(StockCode, Description)
@@ -208,62 +207,97 @@ def run_etl():
 
     for row in df.itertuples(index=False):
         print(f"Processing row: {row}", flush=True)
-        stockcode      = to_str_or_none(row.StockCode)
-        description    = to_str_or_none(row.Description)
-        quantity       = to_int(row.Quantity)
-        unit_price     = to_dec(row.UnitPrice)
-        shipping_cost  = to_dec(row.ShippingCost)
-        discount       = to_dec(row.Discount)
-        invoice_no     = to_str_or_none(row.InvoiceNo)
-        customer_id    = to_str_or_none(row.CustomerID)
-        country        = to_str_or_none(row.Country)
+        stockcode = to_str_or_none(row.StockCode)
+        description = to_str_or_none(row.Description)
+        quantity = to_int(row.Quantity)
+        unit_price = to_dec(row.UnitPrice)
+        shipping_cost = to_dec(row.ShippingCost)
+        discount = to_dec(row.Discount)
+        invoice_no = to_str_or_none(row.InvoiceNo)
+        customer_id = to_str_or_none(row.CustomerID)
+        country = to_str_or_none(row.Country)
         payment_method = to_str_or_none(row.PaymentMethod)
         order_priority = to_str_or_none(row.OrderPriority)
-        shipper        = to_str_or_none(row.ShipmentProvider)
-        channel        = to_str_or_none(row.SalesChannel)
-        wh_loc         = to_str_or_none(row.WarehouseLocation)
-        return_status  = to_str_or_none(row.ReturnStatus)
-        category       = to_str_or_none(row.Category)
-        inv_date       = int(row.InvoiceDate_parsed.strftime('%Y%m%d'))
+        shipper = to_str_or_none(row.ShipmentProvider)
+        channel = to_str_or_none(row.SalesChannel)
+        wh_loc = to_str_or_none(row.WarehouseLocation)
+        return_status = to_str_or_none(row.ReturnStatus)
+        category = to_str_or_none(row.Category)
+        inv_date = int(row.InvoiceDate_parsed.strftime("%Y%m%d"))
 
-        required = [stockcode, wh_loc, category, return_status, shipper,
-                customer_id, order_priority, payment_method, channel, inv_date]
+        required = [
+            stockcode,
+            wh_loc,
+            category,
+            return_status,
+            shipper,
+            customer_id,
+            order_priority,
+            payment_method,
+            channel,
+            inv_date,
+        ]
         if not all(required):
             skipped_rows += 1
             print(f"Skipping row with missing required fields: {row}", flush=True)
             continue
 
-       
-
         try:
             print("Inserting dimension records...", flush=True)
-            k_product = insert_then_get_id(cur, sql_dim_product_ins,  sql_dim_product_sel,  (stockcode, description))
-            k_whloc   = insert_then_get_id(cur, sql_dim_wh_loc_ins,   sql_dim_wh_loc_sel,   (wh_loc,))
-            k_cat     = insert_then_get_id(cur, sql_dim_category_ins, sql_dim_category_sel, (category,))
-            k_shipper = insert_then_get_id(cur, sql_dim_shipper_ins,  sql_dim_shipper_sel,  (return_status, shipper))
-            k_cust    = insert_then_get_id(cur, sql_dim_customer_ins, sql_dim_customer_sel, (customer_id, country))
-            k_order   = insert_then_get_id(cur, sql_dim_order_ins,    sql_dim_order_sel,    (order_priority, payment_method, channel))
-            #k_date    = insert_then_get_id(cur, sql_dim_invdate_ins,  sql_dim_invdate_sel,  (inv_date,))
+            k_product = insert_then_get_id(
+                cur, sql_dim_product_ins, sql_dim_product_sel, (stockcode, description)
+            )
+            k_whloc = insert_then_get_id(
+                cur, sql_dim_wh_loc_ins, sql_dim_wh_loc_sel, (wh_loc,)
+            )
+            k_cat = insert_then_get_id(
+                cur, sql_dim_category_ins, sql_dim_category_sel, (category,)
+            )
+            k_shipper = insert_then_get_id(
+                cur, sql_dim_shipper_ins, sql_dim_shipper_sel, (return_status, shipper)
+            )
+            k_cust = insert_then_get_id(
+                cur, sql_dim_customer_ins, sql_dim_customer_sel, (customer_id, country)
+            )
+            k_order = insert_then_get_id(
+                cur,
+                sql_dim_order_ins,
+                sql_dim_order_sel,
+                (order_priority, payment_method, channel),
+            )
+            # k_date    = insert_then_get_id(cur, sql_dim_invdate_ins,  sql_dim_invdate_sel,  (inv_date,))
 
-            cur.execute(insert_fact, (
-                int(k_product), int(k_order), int(k_cust),
-                inv_date, int(k_shipper),
-                int(k_whloc), int(k_cat),
-                quantity, unit_price, shipping_cost, invoice_no, discount
-            ))
+            cur.execute(
+                insert_fact,
+                (
+                    int(k_product),
+                    int(k_order),
+                    int(k_cust),
+                    inv_date,
+                    int(k_shipper),
+                    int(k_whloc),
+                    int(k_cat),
+                    quantity,
+                    unit_price,
+                    shipping_cost,
+                    invoice_no,
+                    discount,
+                ),
+            )
             inserted_facts += 1
         except Exception as e:
             errors += 1
             print(f"Error processing row {row}: {e}", flush=True)
 
-
             inserted_facts += 1
-    
 
     conn.commit()
     cur.close()
     conn.close()
-    print(f"Inserted facts: {inserted_facts}, skipped (missing fields): {skipped_rows}, errors: {errors}", flush=True)
+    print(
+        f"Inserted facts: {inserted_facts}, skipped (missing fields): {skipped_rows}, errors: {errors}",
+        flush=True,
+    )
 
 
 default_args = {
@@ -277,7 +311,7 @@ with DAG(
     default_args=default_args,
     start_date=datetime(2021, 12, 19),
     schedule_interval="0 0 * * *",
-    catchup=False, 
+    catchup=False,
 ) as dag:
     run_etl_task = PythonOperator(
         task_id="run_etl",

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from io import StringIO
 
 import pandas as pd
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from io import StringIO
 
 CSV_PATH = "/opt/airflow/data/raw_finance_transactions_daily.csv"
 CSV_PATHGl = "/opt/airflow/data/gl_account_hierarchy.csv"
@@ -19,7 +19,7 @@ def run_etl():
     print("ETL started", flush=True)
     hook = PostgresHook(postgres_conn_id="postgres_localhost", schema="test")
     conn = hook.get_conn()
-    conn.autocommit = True  
+    conn.autocommit = True
     cur = conn.cursor()
 
     cur.execute("DROP TABLE IF EXISTS FactFinancialTransaction;")
@@ -54,7 +54,7 @@ def run_etl():
        Level2Type VARCHAR(255),
        Level3Type VARCHAR(255),
        ValidFlag BOOLEAN DEFAULT TRUE
-          
+
     );
 
     CREATE TABLE IF NOT EXISTS DimProfitCenter(
@@ -75,7 +75,7 @@ def run_etl():
        Level4Type VARCHAR(255),
        Level5Type VARCHAR(255),
        ValidFlag BOOLEAN DEFAULT TRUE
-      
+
     );
 
     CREATE TABLE IF NOT EXISTS DimDate(
@@ -102,11 +102,15 @@ def run_etl():
     dfCost = pd.read_csv(CSV_PATHCost).fillna("")
     dfProfit = pd.read_csv(CSV_PATHProfit).fillna("")
 
-    dfGl["parent_gl_code"] =  dfGl["parent_gl_code"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    dfGl["parent_gl_code"] = (
+        dfGl["parent_gl_code"]
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+    )
 
-    
-
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TEMP TABLE stg_transaction (
             date DATE,
             profit_center_code VARCHAR(50) NOT NULL,
@@ -117,30 +121,35 @@ def run_etl():
             region VARCHAR(50) NOT NULL  CHECK (region IN ('NZ','AU')),
             city VARCHAR(50) NOT NULL  CHECK (city IN ('Auckland', 'Wellington', 'Sydney', 'Melbourne')),
             service_line VARCHAR(50) NOT NULL  CHECK (service_line IN ('Electricity', 'Water', 'Waste', 'Gas'))
-        
+
       );
-    """)
+    """
+    )
 
-
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TEMP TABLE stg_gl_account_hierarchy (
             node_code VARCHAR(50) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
             node_type VARCHAR(50) NOT NULL,
             parent_code VARCHAR(50)
       );
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TEMP TABLE stg_cost_center_hierarchy (
             node_code VARCHAR(50) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
             level VARCHAR(50) NOT NULL,
             parent_code VARCHAR(50)
         );
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TEMP TABLE stg_profit_center_hierarchy (
             node_code VARCHAR(50) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
@@ -148,26 +157,26 @@ def run_etl():
             parent_code VARCHAR(50),
             valid_bit BOOLEAN DEFAULT TRUE
         );
-    """)
+    """
+    )
 
     cols = [
-        "date","profit_center_code","cost_center_code","gl_account_code",
-        "amount","currency","region","city","service_line"
-        
+        "date",
+        "profit_center_code",
+        "cost_center_code",
+        "gl_account_code",
+        "amount",
+        "currency",
+        "region",
+        "city",
+        "service_line",
     ]
 
-    colsGl = [
-        "gl_code","gl_name","node_type","parent_gl_code"
-        ]
+    colsGl = ["gl_code", "gl_name", "node_type", "parent_gl_code"]
 
-    colsCost = [
-        "node_code","node_name","level","parent_code"
-        ]
+    colsCost = ["node_code", "node_name", "level", "parent_code"]
 
-    colsProfit = [
-        "node_code","node_name","level","parent_code"
-        ]
-
+    colsProfit = ["node_code", "node_name", "level", "parent_code"]
 
     buf = StringIO()
     df[cols].to_csv(buf, index=False, header=False)
@@ -185,32 +194,43 @@ def run_etl():
     dfProfit[colsProfit].to_csv(bufProfit, index=False, header=False)
     bufProfit.seek(0)
 
-
-    cur.copy_expert("""
+    cur.copy_expert(
+        """
       COPY stg_transaction (
         date, profit_center_code, cost_center_code, gl_account_code,
         amount, currency, region, city, service_line
-       
-      ) FROM STDIN WITH CSV NULL ''
-    """, buf)
 
-    cur.copy_expert("""
+      ) FROM STDIN WITH CSV NULL ''
+    """,
+        buf,
+    )
+
+    cur.copy_expert(
+        """
         COPY stg_gl_account_hierarchy (
             node_code, node_name, node_type, parent_code
       ) FROM STDIN WITH CSV NULL ''
-    """, bufGl)
+    """,
+        bufGl,
+    )
 
-    cur.copy_expert("""
+    cur.copy_expert(
+        """
         COPY stg_cost_center_hierarchy (
             node_code, node_name, level, parent_code
       ) FROM STDIN WITH CSV NULL ''
-    """, bufCost)
+    """,
+        bufCost,
+    )
 
-    cur.copy_expert("""
+    cur.copy_expert(
+        """
         COPY stg_profit_center_hierarchy (
             node_code, node_name, level, parent_code
       ) FROM STDIN WITH CSV NULL ''
-    """, bufProfit)
+    """,
+        bufProfit,
+    )
 
     '''
     cur.execute("""
@@ -239,16 +259,13 @@ def run_etl():
         SET gl_account_code = TRIM(gl_account_code),
             cost_center_code = TRIM(cost_center_code),
             profit_center_code = TRIM(profit_center_code);
-    
+
     """)
 
     '''
 
-
-
-
-
-    cur.execute("""
+    cur.execute(
+        """
       WITH RECURSIVE gl_hierarchy AS (
           SELECT node_code, node_name, node_type, parent_code, node_name::text AS path_names, node_type::text AS path_types, 1 AS level
           FROM stg_gl_account_hierarchy
@@ -262,13 +279,13 @@ def run_etl():
          SELECT h.*
          FROM gl_hierarchy h
          WHERE NOT EXISTS (
-                SELECT 1 
-                FROM stg_gl_account_hierarchy s 
+                SELECT 1
+                FROM stg_gl_account_hierarchy s
                 WHERE TRIM(s.parent_code) = TRIM(h.node_code)
             )
       ),
       split_levels AS (
-            SELECT l.node_code, l.node_name, l.node_type,l.parent_code, 
+            SELECT l.node_code, l.node_name, l.node_type,l.parent_code,
             split_part(l.path_names, ' > ', 1) AS level1Name, split_part(l.path_names, ' > ', 2) AS level2Name, split_part(l.path_names, ' > ', 3) AS level3Name,
             split_part(l.path_types, ' > ', 1) AS level1Type, split_part(l.path_types, ' > ', 2) AS level2Type, split_part(l.path_types, ' > ', 3) AS level3Type
             FROM leafs l
@@ -286,10 +303,11 @@ def run_etl():
         SELECT node_code, node_name, currency, level1Name, level2Name, level3Name, level1Type, level2Type, level3Type, TRUE
         FROM with_currency
         ON CONFLICT (GlCode) DO NOTHING;
-    """)
-     
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
       WITH RECURSIVE cost_center_hierarchy AS (
             SELECT node_code, node_name, level, parent_code, node_name::text AS path_names, level::text AS path_levels, 1 AS level_num
             FROM stg_cost_center_hierarchy
@@ -303,13 +321,13 @@ def run_etl():
             SELECT h.*
             FROM cost_center_hierarchy h
             WHERE NOT EXISTS (
-                SELECT 1 
-                FROM stg_cost_center_hierarchy s 
+                SELECT 1
+                FROM stg_cost_center_hierarchy s
                 WHERE s.parent_code = h.node_code
             )
         ),
         split_levels AS (
-            SELECT l.node_code, l.node_name, l.level, l.parent_code, 
+            SELECT l.node_code, l.node_name, l.level, l.parent_code,
             split_part(l.path_names, ' > ', 1) AS level1Name, split_part(l.path_names, ' > ', 2) AS level2Name, split_part(l.path_names, ' > ', 3) AS level3Name,
             split_part(l.path_levels, ' > ', 1) AS level1Type, split_part(l.path_levels, ' > ', 2) AS level2Type, split_part(l.path_levels, ' > ', 3) AS level3Type
             FROM leafs l
@@ -318,9 +336,11 @@ def run_etl():
         SELECT node_code, node_name, level1Name, level2Name, level3Name, level1Type, level2Type, level3Type, TRUE
         FROM split_levels
         ON CONFLICT (CostCenterCode) DO NOTHING;
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         WITH RECURSIVE profit_center_hierarchy AS (
             SELECT node_code, node_name, level, parent_code, node_name::text AS path_names, level::text AS path_levels, 1 AS level_num
             FROM stg_profit_center_hierarchy
@@ -331,16 +351,16 @@ def run_etl():
             INNER JOIN profit_center_hierarchy p ON TRIM(s.parent_code) = TRIM(p.node_code)
         ),
         leafs AS (
-            SELECT h.* 
+            SELECT h.*
             FROM profit_center_hierarchy h
             WHERE NOT EXISTS (
-                SELECT 1 
-                FROM stg_profit_center_hierarchy s 
+                SELECT 1
+                FROM stg_profit_center_hierarchy s
                 WHERE s.parent_code = h.node_code
             )
         ),
         split_levels AS (
-            SELECT l.node_code, l.node_name, l.level, l.parent_code, 
+            SELECT l.node_code, l.node_name, l.level, l.parent_code,
             split_part(l.path_names, ' > ', 1) AS level1Name, split_part(l.path_names, ' > ', 2) AS level2Name, split_part(l.path_names, ' > ', 3) AS level3Name,
             split_part(l.path_names, ' > ', 4) AS level4Name, split_part(l.path_names, ' > ', 5) AS level5Name,
             split_part(l.path_levels, ' > ', 1) AS level1Type, split_part(l.path_levels, ' > ', 2) AS level2Type, split_part(l.path_levels, ' > ', 3) AS level3Type,
@@ -357,31 +377,35 @@ def run_etl():
         FROM join_with_transaction
         ON CONFLICT (ProfitCenterCode) DO NOTHING;
 
-    """)
+    """
+    )
 
-
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO DimDate (date)
         SELECT DISTINCT date
         FROM stg_transaction
         ON CONFLICT (date) DO NOTHING;
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO FactFinancialTransaction (ProfitCenterKey, CostCenterKey, GlAccountKey, DateKey, amount)
         SELECT dp.ProfitCenterKey, dc.CostCenterKey, dg.GlAccountKey, dd.DateKey,
         CASE
             WHEN dg.GlCode = '8200' THEN -1 * st.amount
             When dg.Level1Name = 'Revenue' OR dg.Level1Name = 'Other Income' THEN st.amount
             ELSE -1 * st.amount
-        END AS amount 
+        END AS amount
         FROM stg_transaction st
         JOIN DimProfitCenter dp ON st.profit_center_code = dp.ProfitCenterCode AND dp.ValidFlag = TRUE
         JOIN DimCostCenter dc ON st.cost_center_code = dc.CostCenterCode AND dc.ValidFlag = TRUE
         JOIN DimGLAccount dg ON st.gl_account_code = dg.GlCode  AND dg.ValidFlag = TRUE
         JOIN DimDate dd ON st.date = dd.date
         ON CONFLICT ON CONSTRAINT unique_transaction_test DO NOTHING;
-    """)
+    """
+    )
 
 
 default_args = {
@@ -395,7 +419,7 @@ with DAG(
     default_args=default_args,
     start_date=datetime(2021, 12, 19),
     schedule_interval="0 0 * * *",
-    catchup=False, 
+    catchup=False,
 ) as dag:
     run_etl_task = PythonOperator(
         task_id="run_etl",
