@@ -21,3 +21,12 @@ jobs:
         env:                         
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+
+          VALIDATE_PYTHON_BLACK: true
+          VALIDATE_PYTHON_RUFF: true
+          VALIDATE_PYTHON_PYLINT: true
+          VALIDATE_MARKDOWN: true
+
+          VALIDATE_PYTHON_FLAKE8: false   # Ruff covers this
+          VALIDATE_PYTHON_ISORT: false    # Ruff/Black+isort already handle imports
+          VALIDATE_NATURAL_LANGUAGE: false
