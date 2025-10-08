@@ -13,6 +13,12 @@ CSV_PATHGl = "/opt/airflow/data/gl_account_hierarchy.csv"
 CSV_PATHCost = "/opt/airflow/data/cost_center_hierarchy.csv"
 CSV_PATHProfit = "/opt/airflow/data/profit_center_hierarchy.csv"
 
+schema = {
+    'gl_code':int,
+    'gl_name': str,
+    'node_type': str,
+    'parent_gl_code': 'Int64'
+}
 
 def run_etl():
     print("ETL started", flush=True)
@@ -20,12 +26,20 @@ def run_etl():
     conn = hook.get_conn()
     conn.autocommit = True
     cur = conn.cursor()
+    engine = hook.get_sqlalchemy_engine()
+
 
     cur.execute("DROP TABLE IF EXISTS FactFinancialTransaction;")
     cur.execute("DROP TABLE IF EXISTS DimDate;")
     cur.execute("DROP TABLE IF EXISTS DimProfitCenter;")
     cur.execute("DROP TABLE IF EXISTS DimGLAccount;")
     cur.execute("DROP TABLE IF EXISTS DimCostCenter;")
+    cur.execute("DROP TABLE IF EXISTS stg_transaction;")
+    cur.execute("DROP TABLE IF EXISTS stg_gl_account_hierarchy;")
+    cur.execute("DROP TABLE IF EXISTS stg_cost_center_hierarchy;")
+    cur.execute("DROP TABLE IF EXISTS stg_profit_center_hierarchy;")
+
+
 
     ddl = """
     CREATE TABLE IF NOT EXISTS DimCostCenter(
@@ -97,20 +111,22 @@ def run_etl():
     conn.commit()
 
     df = pd.read_csv(CSV_PATH, parse_dates=["date"], dayfirst=True).fillna("")
-    dfGl = pd.read_csv(CSV_PATHGl).fillna("")
+    dfGl = pd.read_csv(CSV_PATHGl, dtype=schema)
     dfCost = pd.read_csv(CSV_PATHCost).fillna("")
     dfProfit = pd.read_csv(CSV_PATHProfit).fillna("")
 
+    ''' 
     dfGl["parent_gl_code"] = (
         dfGl["parent_gl_code"]
         .astype(str)
         .str.strip()
         .str.replace(r"\.0$", "", regex=True)
     )
+    '''
 
     cur.execute(
         """
-        CREATE TEMP TABLE stg_transaction (
+        CREATE TABLE stg_transaction (
             date DATE,
             profit_center_code VARCHAR(50) NOT NULL,
             cost_center_code VARCHAR(50) NOT NULL,
@@ -127,18 +143,29 @@ def run_etl():
 
     cur.execute(
         """
-        CREATE TEMP TABLE stg_gl_account_hierarchy (
-            node_code VARCHAR(50) PRIMARY KEY,
-            node_name VARCHAR(255) NOT NULL,
+        CREATE  TABLE stg_gl_account_hierarchy (
+            gl_code VARCHAR(50) PRIMARY KEY,
+            gl_name VARCHAR(255) NOT NULL,
             node_type VARCHAR(50) NOT NULL,
-            parent_code VARCHAR(50)
+            parent_gl_code VARCHAR(50)
       );
     """
     )
 
     cur.execute(
         """
-        CREATE TEMP TABLE stg_cost_center_hierarchy (
+        CREATE  TABLE stg_cost_center_hierarchy (
+            node_code VARCHAR(50) PRIMARY KEY,
+            node_name VARCHAR(255) NOT NULL,
+            level VARCHAR(50) NOT NULL,
+            parent_code VARCHAR(50) 
+        );
+    """
+    )
+
+    cur.execute(
+        """
+        CREATE  TABLE stg_profit_center_hierarchy (
             node_code VARCHAR(50) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
             level VARCHAR(50) NOT NULL,
@@ -146,19 +173,12 @@ def run_etl():
         );
     """
     )
+    dfGl.to_sql('stg_gl_account_hierarchy', engine, if_exists='replace', index=False)
+    dfCost.to_sql('stg_cost_center_hierarchy', engine, if_exists='replace', index=False)
+    dfProfit.to_sql('stg_profit_center_hierarchy', engine, if_exists='replace', index=False)
+    df.to_sql('stg_transaction', engine, if_exists='replace', index=False)
 
-    cur.execute(
-        """
-        CREATE TEMP TABLE stg_profit_center_hierarchy (
-            node_code VARCHAR(50) PRIMARY KEY,
-            node_name VARCHAR(255) NOT NULL,
-            level VARCHAR(50) NOT NULL,
-            parent_code VARCHAR(50),
-            valid_bit BOOLEAN DEFAULT TRUE
-        );
-    """
-    )
-
+    '''
     cols = [
         "date",
         "profit_center_code",
@@ -193,6 +213,7 @@ def run_etl():
     dfProfit[colsProfit].to_csv(bufProfit, index=False, header=False)
     bufProfit.seek(0)
 
+
     cur.copy_expert(
         """
       COPY stg_transaction (
@@ -204,6 +225,7 @@ def run_etl():
         buf,
     )
 
+    
     cur.copy_expert(
         """
         COPY stg_gl_account_hierarchy (
@@ -212,6 +234,8 @@ def run_etl():
     """,
         bufGl,
     )
+    
+    dfGl.to_sql('stg_gl_account_hierarchy', engine, if_exists='replace', index=False)
 
     cur.copy_expert(
         """
@@ -230,8 +254,9 @@ def run_etl():
     """,
         bufProfit,
     )
+    
 
-    '''
+  
     cur.execute("""
         UPDATE stg_gl_account_hierarchy
         SET parent_code = NULL
@@ -266,13 +291,13 @@ def run_etl():
     cur.execute(
         """
       WITH RECURSIVE gl_hierarchy AS (
-          SELECT node_code, node_name, node_type, parent_code, node_name::text AS path_names, node_type::text AS path_types, 1 AS level
+          SELECT gl_code, gl_name, node_type, parent_gl_code, gl_name::text AS path_names, node_type::text AS path_types, 1 AS level
           FROM stg_gl_account_hierarchy
-          WHERE parent_code IS NULL OR TRIM(parent_code) = ''
+          WHERE parent_gl_code IS NULL
           UNION ALL
-          SELECT s.node_code, s.node_name, s.node_type, s.parent_code, g.path_names || ' > ' || s.node_name, g.path_types || ' > ' || s.node_type, g.level + 1
+          SELECT s.gl_code, s.gl_name, s.node_type, s.parent_gl_code, g.path_names || ' > ' || s.gl_name, g.path_types || ' > ' || s.node_type, g.level + 1
           FROM stg_gl_account_hierarchy s
-          INNER JOIN gl_hierarchy g ON TRIM(s.parent_code) = TRIM(g.node_code)
+          INNER JOIN gl_hierarchy g ON s.parent_gl_code = g.gl_code
       ),
       leafs AS (
          SELECT h.*
@@ -280,26 +305,26 @@ def run_etl():
          WHERE NOT EXISTS (
                 SELECT 1
                 FROM stg_gl_account_hierarchy s
-                WHERE TRIM(s.parent_code) = TRIM(h.node_code)
+                WHERE s.parent_gl_code = h.gl_code
             )
       ),
       split_levels AS (
-            SELECT l.node_code, l.node_name, l.node_type,l.parent_code,
+            SELECT l.gl_code, l.gl_name, l.node_type,l.parent_gl_code,
             split_part(l.path_names, ' > ', 1) AS level1Name, split_part(l.path_names, ' > ', 2) AS level2Name, split_part(l.path_names, ' > ', 3) AS level3Name,
             split_part(l.path_types, ' > ', 1) AS level1Type, split_part(l.path_types, ' > ', 2) AS level2Type, split_part(l.path_types, ' > ', 3) AS level3Type
             FROM leafs l
         ),
         with_currency AS (
-         SELECT DISTINCT sl.node_code, sl.node_name, sl.level1Name, sl.level2Name, sl.level3Name, sl.level1Type, sl.level2Type, sl.level3Type, t.currency
+         SELECT DISTINCT sl.gl_code, sl.gl_name, sl.level1Name, sl.level2Name, sl.level3Name, sl.level1Type, sl.level2Type, sl.level3Type, t.currency
          FROM split_levels sl
          JOIN (
-            SELECT DISTINCT  TRIM(gl_account_code) AS gl_account_code, currency
+            SELECT DISTINCT  gl_account_code AS gl_account_code, currency
             FROM stg_transaction
-         ) t ON TRIM(sl.node_code) = t.gl_account_code
+         ) t ON sl.gl_code = t.gl_account_code
         )
 
         INSERT INTO DimGLAccount(GlCode, GlName, Currency, level1Name, level2Name, level3Name, level1Type, level2Type, level3Type, ValidFlag)
-        SELECT node_code, node_name, currency, level1Name, level2Name, level3Name, level1Type, level2Type, level3Type, TRUE
+        SELECT gl_code, gl_name, currency, level1Name, level2Name, level3Name, level1Type, level2Type, level3Type, TRUE
         FROM with_currency
         ON CONFLICT (GlCode) DO NOTHING;
     """
@@ -400,7 +425,7 @@ def run_etl():
         FROM stg_transaction st
         JOIN DimProfitCenter dp ON st.profit_center_code = dp.ProfitCenterCode AND dp.ValidFlag = TRUE
         JOIN DimCostCenter dc ON st.cost_center_code = dc.CostCenterCode AND dc.ValidFlag = TRUE
-        JOIN DimGLAccount dg ON st.gl_account_code = dg.GlCode  AND dg.ValidFlag = TRUE
+        JOIN DimGLAccount dg ON st.gl_account_code::integer = dg.GlCode::integer  AND dg.ValidFlag = TRUE
         JOIN DimDate dd ON st.date = dd.date
         ON CONFLICT ON CONSTRAINT unique_transaction_test DO NOTHING;
     """
